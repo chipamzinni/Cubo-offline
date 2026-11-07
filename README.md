@@ -148,7 +148,7 @@ button.secondary{background:#333}button.danger{background:#ff453a}button.success
   </div>
   <div id="customCenters" style="display:none;margin-bottom:14px">
     <div id="centerStepLabel" style="text-align:center;font-size:.9rem;font-weight:600;margin-bottom:6px;color:#4f8cff">Passo 1/6 — Mostre a face de CIMA</div>
-    <div style="text-align:center;font-size:.78rem;opacity:.7;margin-bottom:10px;line-height:1.35">Capture cada face (os quadradinhos começam cinza e ficam coloridos). Quando todos estiverem coloridos, pode começar.</div>
+    <div style="text-align:center;font-size:.78rem;opacity:.7;margin-bottom:10px;line-height:1.35">Mostre a face indicada. A cor do <b>centro</b> define a cor desse lado no cubo 3D. Quadradinhos cinza → coloridos.</div>
     <div id="centerDots" style="display:flex;gap:6px;justify-content:center;margin-bottom:12px;flex-wrap:wrap"></div>
     <div class="btn-row" style="margin-bottom:8px">
       <button id="btnPrevCenter" class="secondary">◀ Anterior</button>
@@ -3125,28 +3125,32 @@ function captureColor() {
   // Modo definição de centros (tela inicial)
   if (window._scanForCenter) {
     assignCenterColor(centerCol);
-    document.getElementById('scanResult').textContent = 'Centro: ' + names[centerCol] + ' · face lida';
+    document.getElementById('scanResult').textContent = 'Centro: ' + names[centerCol];
     showToast(names[centerCol] + ' capturado');
     setTimeout(closeScanner, 500);
     window._scanForCenter = false;
     return;
   }
 
-  // Modo pintura: aplica as 9 cores detectadas na face atual
-  const face = FACES[currentFaceIdx];
+  // Modo pintura: a COR DO CENTRO decide qual face do cubo 3D recebe as cores
+  // (branco → U, verde → F, etc. conforme o esquema DEFAULT)
+  let face = null;
+  for (const f of FACES) {
+    if (DEFAULT[f] === centerCol) { face = f; break; }
+  }
+  if (!face) face = FACES[currentFaceIdx];
   const map = PANEL_TO_STATE[face];
   for (let p = 0; p < 9; p++) {
     const si = map[p];
-    if (si === 4) {
-      state[face][4] = DEFAULT[face]; // centro oficial do esquema
-    } else {
-      state[face][si] = grid[p];
-    }
+    if (si === 4) state[face][4] = DEFAULT[face];
+    else state[face][si] = grid[p];
   }
+  currentFaceIdx = Math.max(0, FACES.indexOf(face));
+  lookAtFace(face);
   renderPaintFace();
   render3D();
-  document.getElementById('scanResult').textContent = 'Face lida · centro ' + names[centerCol];
-  showToast('Face capturada');
+  document.getElementById('scanResult').textContent = names[centerCol] + ' aplicado no cubo 3D';
+  showToast(names[centerCol] + ' → cubo');
 }
 document.getElementById('btnScan').onclick = openScanner;
 document.getElementById('btnCloseScan').onclick = closeScanner;
@@ -3269,17 +3273,21 @@ function updateCenterStepUI() {
     dots.innerHTML = '';
     centerFacesOrder.forEach((face, i) => {
       const d = document.createElement('div');
-      // cinza até capturar; depois fica na cor real
+      const col = DEFAULT[face] || 'w';
+      // sempre mostra a cor atual do centro no cubo 3D
+      d.style.cssText = 'width:32px;height:32px;border-radius:8px;border:2px solid #555;cursor:pointer;background:' + COLORS[col] + ';';
       if (centersDone[face]) {
-        d.style.cssText = 'width:32px;height:32px;border-radius:8px;border:2px solid #4f8cff;cursor:pointer;background:' + COLORS[DEFAULT[face]] + ';';
+        d.style.borderColor = '#4f8cff';
+        d.style.opacity = '1';
       } else {
-        d.style.cssText = 'width:32px;height:32px;border-radius:8px;border:2px solid #555;cursor:pointer;background:#3a3a3a;';
+        d.style.opacity = '0.55';
       }
       if (i === centerStep) {
         d.style.borderColor = '#fff';
         d.style.boxShadow = '0 0 0 2px #4f8cff';
+        d.style.opacity = '1';
       }
-      d.title = centerStepNames[face] + (centersDone[face] ? ' ✓' : ' (pendente)');
+      d.title = centerStepNames[face] + (centersDone[face] ? ' ✓' : ' (toque ou capture)');
       d.onclick = () => {
         centerStep = i;
         updateCenterStepUI();
@@ -3305,21 +3313,30 @@ function updateCenterStepUI() {
 
 function assignCenterColor(col) {
   const f = centerFacesOrder[centerStep];
+  // se a cor já estava em outra face, troca (evita dois centros iguais)
+  for (const other of FACES) {
+    if (other !== f && DEFAULT[other] === col) {
+      const old = DEFAULT[f];
+      DEFAULT[other] = old;
+      F2C[other] = old;
+      for (let i = 0; i < 9; i++) state[other][i] = old;
+    }
+  }
   DEFAULT[f] = col;
   F2C[f] = col;
   C2F = {};
   Object.keys(F2C).forEach(face => { C2F[F2C[face]] = face; });
-  state[f][4] = col;
+  // pinta só o centro dessa face na cor capturada; resto acompanha o centro
   for (let i = 0; i < 9; i++) state[f][i] = col;
   centersDone[f] = true;
+  forceCenters();
   updateCenterStepUI();
-  showToast('Centro ' + ({w:'Branco',y:'Amarelo',r:'Vermelho',o:'Laranja',b:'Azul',g:'Verde'}[col] || col) + ' definido');
-  // avança sozinho para o próximo lado pendente
+  showToast('Centro ' + ({w:'Branco',y:'Amarelo',r:'Vermelho',o:'Laranja',b:'Azul',g:'Verde'}[col] || col) + ' na face ' + f);
   if (centerStep < 5) {
     setTimeout(() => {
       centerStep++;
       updateCenterStepUI();
-    }, 400);
+    }, 450);
   }
 }
 
