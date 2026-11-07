@@ -2297,10 +2297,10 @@ const FACE_CAMERA = {
 const PANEL_TO_STATE = {
   F:[0,1,2,3,4,5,6,7,8],
   R:[0,1,2,3,4,5,6,7,8],
-  B:[2,1,0,5,4,3,8,7,6],   // flip H — olhando a traseira
-  L:[2,1,0,5,4,3,8,7,6],   // flip H — olhando a esquerda
-  U:[6,7,8,3,4,5,0,1,2],   // 180° — alinha com vista de cima
-  D:[6,7,8,3,4,5,0,1,2]    // 180° — alinha com vista de baixo
+  B:[0,1,2,3,4,5,6,7,8],
+  L:[0,1,2,3,4,5,6,7,8],
+  U:[0,1,2,3,4,5,6,7,8],
+  D:[0,1,2,3,4,5,6,7,8]
 };
 let C2F = {w:'U', y:'D', r:'R', o:'L', g:'F', b:'B'};
 let F2C = {U:'w', D:'y', R:'r', L:'o', F:'g', B:'b'};
@@ -3284,11 +3284,10 @@ function captureColor(ev) {
       if (DEFAULT[f] === centerCol) { face = f; break; }
     }
     if (!face) face = FACES[currentFaceIdx] || 'F';
-    const map = PANEL_TO_STATE[face] || [0,1,2,3,4,5,6,7,8];
+    // grade da câmera (0–8) → state na mesma ordem (sem espelhar)
     for (let p = 0; p < 9; p++) {
-      const si = map[p];
-      if (si === 4) state[face][4] = DEFAULT[face];
-      else state[face][si] = grid[p];
+      if (p === 4) state[face][4] = DEFAULT[face];
+      else state[face][p] = grid[p];
     }
     visited[face] = 1;
     currentFaceIdx = Math.max(0, FACES.indexOf(face));
