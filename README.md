@@ -2146,7 +2146,7 @@ button.secondary{background:#333}button.danger{background:#ff453a}button.success
       return results;
     };
     var __nodes = 0;
-    var __nodeLimit = 250000; // evita travar em cubo impossível
+    var __nodeLimit = 800000; // evita travar em cubo impossível
     phase1 = function(state, depth) {
       var len, m, move, next, ref, ref1, results;
       if (++__nodes > __nodeLimit) { return; }
@@ -2723,14 +2723,21 @@ const CORNER_FACELETS = [
   [8,9,20],[6,18,38],[0,36,47],[2,45,11],[29,26,15],[27,44,24],[33,53,42],[35,17,51]
 ];
 
-function trySolveCube(cube) {
+function colorCountReport() {
+  const c = countColors();
+  const names = {w:'Branco',y:'Amarelo',r:'Vermelho',o:'Laranja',b:'Azul',g:'Verde'};
+  return Object.keys(c).map(k => names[k] + ':' + c[k]).join(' · ');
+}
+
+function trySolveCube(cube, depth) {
+  depth = depth || 22;
   try {
     if (typeof cube.isSolved === 'function' && cube.isSolved()) return [];
   } catch (_) {}
   let alg = '';
   try {
-    if (typeof cube.solveUpright === 'function') alg = cube.solveUpright(18) || '';
-    else if (typeof cube.solve === 'function') alg = cube.solve() || '';
+    if (typeof cube.solveUpright === 'function') alg = cube.solveUpright(depth) || '';
+    else if (typeof cube.solve === 'function') alg = cube.solve(depth) || '';
   } catch (_) { return null; }
   if (!alg || !String(alg).trim()) {
     try { if (cube.isSolved()) return []; } catch(_){}
@@ -2739,7 +2746,6 @@ function trySolveCube(cube) {
   return String(alg).trim().split(/\s+/).filter(Boolean);
 }
 
-/** Aplica string facelet URFDLB de volta no state[] (cores w/y/r/…) */
 function applyFaceletToState(facelet) {
   const order = ['U','R','F','D','L','B'];
   const F2COL = {U:'w', R:'r', F:'g', D:'y', L:'o', B:'b'};
@@ -2748,65 +2754,89 @@ function applyFaceletToState(facelet) {
       const ch = facelet[f * 9 + i];
       state[order[f]][i] = F2COL[ch] || state[order[f]][i];
     }
-    state[order[f]][4] = DEFAULT[order[f]]; // centros oficiais
+    state[order[f]][4] = DEFAULT[order[f]];
   }
 }
 
-/** Tenta reparar facelet até ficar solucionável (troca aresta / gira canto) */
-function repairAndSolve(facelet) {
-  // 1) como está
+function solveFacelet(s, depth) {
   try {
-    let cube = Cube.fromString(facelet);
-    let moves = trySolveCube(cube);
-    if (moves) return { moves, facelet, repaired: false };
-  } catch (_) {}
+    const cube = Cube.fromString(s);
+    return trySolveCube(cube, depth);
+  } catch (_) {
+    return null;
+  }
+}
 
-  const arr = facelet.split('');
+/** Repara até ficar solucionável — prioriza ajustes mínimos */
+function repairAndSolve(facelet) {
+  // 1) direto
+  let moves = solveFacelet(facelet, 22);
+  if (moves) return { moves, facelet, repaired: false };
 
-  // 2) flip de cada aresta (troca os 2 adesivos)
-  for (let e = 0; e < EDGE_FACELETS.length; e++) {
-    const [a, b] = EDGE_FACELETS[e];
-    const copy = arr.slice();
-    const t = copy[a]; copy[a] = copy[b]; copy[b] = t;
-    // centros intactos
-    const s = copy.join('');
-    try {
-      const cube = Cube.fromString(s);
-      const moves = trySolveCube(cube);
-      if (moves) return { moves, facelet: s, repaired: true };
-    } catch (_) {}
+  const arr0 = facelet.split('');
+
+  // 2) flip 1 aresta
+  for (let e = 0; e < 12; e++) {
+    const a = arr0.slice();
+    const [i, j] = EDGE_FACELETS[e];
+    const t = a[i]; a[i] = a[j]; a[j] = t;
+    const s = a.join('');
+    moves = solveFacelet(s, 20);
+    if (moves) return { moves, facelet: s, repaired: true };
   }
 
-  // 3) twist de cada canto (+1 orientação)
-  for (let c = 0; c < CORNER_FACELETS.length; c++) {
+  // 3) twist 1 canto
+  for (let c = 0; c < 8; c++) {
+    const a = arr0.slice();
     const idx = CORNER_FACELETS[c];
-    const copy = arr.slice();
-    const tmp = copy[idx[0]];
-    copy[idx[0]] = copy[idx[2]];
-    copy[idx[2]] = copy[idx[1]];
-    copy[idx[1]] = tmp;
-    const s = copy.join('');
-    try {
-      const cube = Cube.fromString(s);
-      const moves = trySolveCube(cube);
-      if (moves) return { moves, facelet: s, repaired: true };
-    } catch (_) {}
+    const tmp = a[idx[0]];
+    a[idx[0]] = a[idx[2]];
+    a[idx[2]] = a[idx[1]];
+    a[idx[1]] = tmp;
+    const s = a.join('');
+    moves = solveFacelet(s, 20);
+    if (moves) return { moves, facelet: s, repaired: true };
   }
 
-  // 4) flip de 2 arestas (parity comum)
-  for (let e1 = 0; e1 < EDGE_FACELETS.length; e1++) {
-    for (let e2 = e1 + 1; e2 < EDGE_FACELETS.length; e2++) {
-      const copy = arr.slice();
+  // 4) flip 2 arestas (paridade de orientação)
+  for (let e1 = 0; e1 < 12; e1++) {
+    for (let e2 = e1 + 1; e2 < 12; e2++) {
+      const a = arr0.slice();
       for (const e of [e1, e2]) {
-        const [a, b] = EDGE_FACELETS[e];
-        const t = copy[a]; copy[a] = copy[b]; copy[b] = t;
+        const [i, j] = EDGE_FACELETS[e];
+        const t = a[i]; a[i] = a[j]; a[j] = t;
       }
-      const s = copy.join('');
-      try {
-        const cube = Cube.fromString(s);
-        const moves = trySolveCube(cube);
-        if (moves) return { moves, facelet: s, repaired: true };
-      } catch (_) {}
+      const s = a.join('');
+      moves = solveFacelet(s, 18);
+      if (moves) return { moves, facelet: s, repaired: true };
+    }
+  }
+
+  // 5) troca 2 cantos (permutação) — só cores dos 3 adesivos
+  for (let c1 = 0; c1 < 8; c1++) {
+    for (let c2 = c1 + 1; c2 < 8; c2++) {
+      const a = arr0.slice();
+      const A = CORNER_FACELETS[c1], B = CORNER_FACELETS[c2];
+      for (let k = 0; k < 3; k++) {
+        const t = a[A[k]]; a[A[k]] = a[B[k]]; a[B[k]] = t;
+      }
+      const s = a.join('');
+      moves = solveFacelet(s, 18);
+      if (moves) return { moves, facelet: s, repaired: true };
+    }
+  }
+
+  // 6) troca 2 arestas inteiras
+  for (let e1 = 0; e1 < 12; e1++) {
+    for (let e2 = e1 + 1; e2 < 12; e2++) {
+      const a = arr0.slice();
+      const A = EDGE_FACELETS[e1], B = EDGE_FACELETS[e2];
+      for (let k = 0; k < 2; k++) {
+        const t = a[A[k]]; a[A[k]] = a[B[k]]; a[B[k]] = t;
+      }
+      const s = a.join('');
+      moves = solveFacelet(s, 18);
+      if (moves) return { moves, facelet: s, repaired: true };
     }
   }
 
@@ -2815,24 +2845,24 @@ function repairAndSolve(facelet) {
 
 function generateSolution() {
   forceCenters();
-  if (!isValidColorCount()) {
-    throw new Error('Cada cor deve aparecer exatamente 9 vezes.');
+  const counts = countColors();
+  const bad = Object.keys(counts).filter(k => counts[k] !== 9);
+  if (bad.length) {
+    throw new Error('Cores desbalanceadas — ' + colorCountReport() + '. Precisa 9 de cada.');
   }
   const facelet = toFaceletString();
-  let result = null;
-  try {
-    result = repairAndSolve(facelet);
-  } catch (e) {
-    throw new Error('Falha ao processar o cubo: ' + (e.message || e));
+  if (facelet.length !== 54) {
+    throw new Error('Facelet inválido (' + facelet.length + ' posições).');
   }
+  let result = repairAndSolve(facelet);
   if (!result) {
-    throw new Error('Não achei solução mesmo ajustando. Confira se há 9 de cada cor.');
+    throw new Error('Não consegui montar. Contagem: ' + colorCountReport() + '. Use Girar nas faces ou re-escaneie.');
   }
   if (result.repaired) {
     applyFaceletToState(result.facelet);
     render3D();
     try { renderPaintFace(); } catch(_){}
-    showToast('Ajustei cores mínimas para ficar montável');
+    showToast('Ajustei o mínimo para ficar montável');
   }
   return result.moves;
 }
