@@ -3361,12 +3361,21 @@ function updateScanFaceDots() {
   if (!el) return;
   el.innerHTML = '';
   const labels = {U:'U',D:'D',F:'F',B:'B',L:'L',R:'R'};
-  FACES.forEach(f => {
+  const cur = FACES[currentFaceIdx];
+  FACES.forEach((f, i) => {
     const d = document.createElement('div');
     const done = !!visited[f];
-    d.style.cssText = 'width:30px;height:30px;border-radius:8px;border:2px solid '+(done?'#4f8cff':'#555')+';display:flex;align-items:center;justify-content:center;font-size:.65rem;font-weight:700;color:#111;background:'+COLORS[DEFAULT[f]]+';opacity:'+(done?'1':'0.45');
+    const isCur = f === cur;
+    d.style.cssText = 'width:32px;height:32px;border-radius:8px;border:2px solid '+(isCur?'#fff':(done?'#4f8cff':'#555'))+';display:flex;align-items:center;justify-content:center;font-size:.65rem;font-weight:700;color:#111;background:'+COLORS[DEFAULT[f]]+';opacity:'+(isCur||done?'1':'0.5')+';cursor:pointer;'+(isCur?'box-shadow:0 0 0 2px #4f8cff;':'');
     d.textContent = labels[f];
-    d.title = FACE_NAMES[f] || f;
+    d.title = (FACE_NAMES[f] || f) + (done ? ' ✓' : ' — tocar para capturar');
+    d.onclick = () => {
+      currentFaceIdx = i;
+      lookAtFace(f);
+      updateScanFaceDots();
+      const res = document.getElementById('scanResult');
+      if (res) res.textContent = 'Face: ' + (FACE_NAMES[f] || f) + ' — enquadre e Confirmar';
+    };
     el.appendChild(d);
   });
 }
@@ -3418,12 +3427,12 @@ function scanLiveLoop() {
     paintLiveGrid(grid);
     const names = {w:'Branco',y:'Amarelo',r:'Vermelho',o:'Laranja',b:'Azul',g:'Verde'};
     const center = grid[4];
-    let faceHint = '';
-    for (const f of FACES) {
-      if (DEFAULT[f] === center) { faceHint = ' → ' + (FACE_NAMES[f] || f); break; }
-    }
+    const face = FACES[currentFaceIdx] || 'F';
     const res = document.getElementById('scanResult');
-    if (res) res.textContent = 'Centro: ' + names[center] + faceHint + ' · toque em Confirmar';
+    if (res) {
+      res.textContent = 'Capturando: ' + (FACE_NAMES[face] || face) +
+        ' · centro lido: ' + names[center] + ' · Confirmar';
+    }
   }
   scanLiveRAF = requestAnimationFrame(scanLiveLoop);
 }
@@ -3496,20 +3505,31 @@ function captureColor(ev) {
       showToast('Ajustei vermelho↔laranja nesta face');
     }
     visited[face] = 1;
-    lookAtFace(face);
+    // avança para a próxima face ainda não capturada
+    let nextIdx = -1;
+    for (let k = 1; k <= FACES.length; k++) {
+      const j = (currentFaceIdx + k) % FACES.length;
+      if (!visited[FACES[j]]) { nextIdx = j; break; }
+    }
+    if (nextIdx >= 0) {
+      currentFaceIdx = nextIdx;
+      lookAtFace(FACES[nextIdx]);
+    } else {
+      lookAtFace(face);
+    }
     renderPaintFace();
     render3D();
     updateScanFaceDots();
     const doneCount = FACES.filter(f => visited[f]).length;
-    const hint = (centerCol !== expected)
-      ? (' (centro lido ' + names[centerCol] + ', esperado ' + names[expected] + ')')
-      : '';
-    document.getElementById('scanResult').textContent =
-      '✓ ' + (FACE_NAMES[face] || face) + ' · ' + doneCount + '/6' + hint;
-    showToast((FACE_NAMES[face] || face) + ' (' + doneCount + '/6)');
+    document.getElementById('btnFinish').disabled = doneCount < 6;
     if (doneCount >= 6) {
-      document.getElementById('btnFinish').disabled = false;
+      document.getElementById('scanResult').textContent = '✓ 6/6 faces — pode Fechar e Resolver';
       showToast('Todas as faces lidas!');
+    } else {
+      const nf = FACES[currentFaceIdx];
+      document.getElementById('scanResult').textContent =
+        '✓ ' + (FACE_NAMES[face] || face) + ' ok · ' + doneCount + '/6 · agora: ' + (FACE_NAMES[nf] || nf);
+      showToast(doneCount + '/6 · próxima: ' + (FACE_NAMES[nf] || nf));
     }
   } catch (err) {
     console.error(err);
