@@ -2715,35 +2715,126 @@ function solveShort(cube, maxDepth) {
   return null;
 }
 
-function generateSolution() {
-  forceCenters();
-  const facelet = toFaceletString();
-  let cube;
-  try {
-    cube = Cube.fromString(facelet);
-  } catch (e) {
-    throw new Error('Cubo inválido. Use exatamente 9 de cada cor e mantenha os centros oficiais.');
-  }
+// Índices facelet (URFDLB, 0–53) das 12 arestas e 8 cantos
+const EDGE_FACELETS = [
+  [5,10],[7,19],[3,37],[1,46],[32,16],[28,25],[30,43],[34,52],[23,12],[21,41],[50,39],[48,14]
+];
+const CORNER_FACELETS = [
+  [8,9,20],[6,18,38],[0,36,47],[2,45,11],[29,26,15],[27,44,24],[33,53,42],[35,17,51]
+];
+
+function trySolveCube(cube) {
   try {
     if (typeof cube.isSolved === 'function' && cube.isSolved()) return [];
   } catch (_) {}
-
-  // Só Kociemba (sem busca bruta — evitava travar no celular)
   let alg = '';
   try {
-    if (typeof cube.solveUpright === 'function') {
-      alg = cube.solveUpright(16) || '';
-    } else if (typeof cube.solve === 'function') {
-      alg = cube.solve() || '';
-    }
-  } catch (e) {
-    throw new Error('Não foi possível resolver. Cores podem formar um cubo impossível.');
-  }
+    if (typeof cube.solveUpright === 'function') alg = cube.solveUpright(18) || '';
+    else if (typeof cube.solve === 'function') alg = cube.solve() || '';
+  } catch (_) { return null; }
   if (!alg || !String(alg).trim()) {
     try { if (cube.isSolved()) return []; } catch(_){}
-    throw new Error('Cubo impossível ou cores inconsistentes. Revise as faces (bordas/cantos não batem).');
+    return null;
   }
   return String(alg).trim().split(/\s+/).filter(Boolean);
+}
+
+/** Aplica string facelet URFDLB de volta no state[] (cores w/y/r/…) */
+function applyFaceletToState(facelet) {
+  const order = ['U','R','F','D','L','B'];
+  const F2COL = {U:'w', R:'r', F:'g', D:'y', L:'o', B:'b'};
+  for (let f = 0; f < 6; f++) {
+    for (let i = 0; i < 9; i++) {
+      const ch = facelet[f * 9 + i];
+      state[order[f]][i] = F2COL[ch] || state[order[f]][i];
+    }
+    state[order[f]][4] = DEFAULT[order[f]]; // centros oficiais
+  }
+}
+
+/** Tenta reparar facelet até ficar solucionável (troca aresta / gira canto) */
+function repairAndSolve(facelet) {
+  // 1) como está
+  try {
+    let cube = Cube.fromString(facelet);
+    let moves = trySolveCube(cube);
+    if (moves) return { moves, facelet, repaired: false };
+  } catch (_) {}
+
+  const arr = facelet.split('');
+
+  // 2) flip de cada aresta (troca os 2 adesivos)
+  for (let e = 0; e < EDGE_FACELETS.length; e++) {
+    const [a, b] = EDGE_FACELETS[e];
+    const copy = arr.slice();
+    const t = copy[a]; copy[a] = copy[b]; copy[b] = t;
+    // centros intactos
+    const s = copy.join('');
+    try {
+      const cube = Cube.fromString(s);
+      const moves = trySolveCube(cube);
+      if (moves) return { moves, facelet: s, repaired: true };
+    } catch (_) {}
+  }
+
+  // 3) twist de cada canto (+1 orientação)
+  for (let c = 0; c < CORNER_FACELETS.length; c++) {
+    const idx = CORNER_FACELETS[c];
+    const copy = arr.slice();
+    const tmp = copy[idx[0]];
+    copy[idx[0]] = copy[idx[2]];
+    copy[idx[2]] = copy[idx[1]];
+    copy[idx[1]] = tmp;
+    const s = copy.join('');
+    try {
+      const cube = Cube.fromString(s);
+      const moves = trySolveCube(cube);
+      if (moves) return { moves, facelet: s, repaired: true };
+    } catch (_) {}
+  }
+
+  // 4) flip de 2 arestas (parity comum)
+  for (let e1 = 0; e1 < EDGE_FACELETS.length; e1++) {
+    for (let e2 = e1 + 1; e2 < EDGE_FACELETS.length; e2++) {
+      const copy = arr.slice();
+      for (const e of [e1, e2]) {
+        const [a, b] = EDGE_FACELETS[e];
+        const t = copy[a]; copy[a] = copy[b]; copy[b] = t;
+      }
+      const s = copy.join('');
+      try {
+        const cube = Cube.fromString(s);
+        const moves = trySolveCube(cube);
+        if (moves) return { moves, facelet: s, repaired: true };
+      } catch (_) {}
+    }
+  }
+
+  return null;
+}
+
+function generateSolution() {
+  forceCenters();
+  if (!isValidColorCount()) {
+    throw new Error('Cada cor deve aparecer exatamente 9 vezes.');
+  }
+  const facelet = toFaceletString();
+  let result = null;
+  try {
+    result = repairAndSolve(facelet);
+  } catch (e) {
+    throw new Error('Falha ao processar o cubo: ' + (e.message || e));
+  }
+  if (!result) {
+    throw new Error('Não achei solução mesmo ajustando. Confira se há 9 de cada cor.');
+  }
+  if (result.repaired) {
+    applyFaceletToState(result.facelet);
+    render3D();
+    try { renderPaintFace(); } catch(_){}
+    showToast('Ajustei cores mínimas para ficar montável');
+  }
+  return result.moves;
 }
 
 /** 1 = lento … 5 = rápido → duração base em ms */
