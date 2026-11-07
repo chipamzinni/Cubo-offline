@@ -113,7 +113,7 @@ button.secondary{background:#333}button.danger{background:#ff453a}button.success
 <!-- Modal câmera — leitura em tempo real -->
 <div id="scanModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:600;flex-direction:column;align-items:center;justify-content:flex-start;padding:12px;overflow-y:auto;">
   <div style="color:#fff;font-weight:600;margin:8px 0 6px;font-size:1rem;text-align:center">Enquadre o cubo no quadrado</div>
-  <div style="color:#aaa;font-size:.75rem;text-align:center;margin-bottom:8px;max-width:300px;line-height:1.35">Só a área central é lida (fundo ignorado). Vire o cubo e toque em Confirmar a cada face.</div>
+  <div style="color:#aaa;font-size:.75rem;text-align:center;margin-bottom:8px;max-width:300px;line-height:1.35">Escolha a face (F R B L U D), enquadre o cubo e Confirmar. Fundo é ignorado.</div>
   <div style="position:relative;width:min(300px,92vw);aspect-ratio:1;border-radius:14px;overflow:hidden;background:#111;border:2px solid #4f8cff">
     <video id="scanVideo" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover"></video>
     <div id="scanGridOverlay" style="position:absolute;inset:16%;display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);gap:3px;pointer-events:none">
@@ -191,8 +191,10 @@ button.secondary{background:#333}button.danger{background:#ff453a}button.success
 <div class="progress" id="progress">Face 1 de 6</div>
 <div class="btn-row">
 <button id="btnPrevFace" class="secondary">◀ Anterior</button>
-<button id="btnRotCCW" class="secondary" title="Girar cores anti-horário">↺ Girar</button>
-<button id="btnRotCW" class="secondary" title="Girar cores horário">Girar ↻</button>
+<button id="btnRotCCW" class="secondary" title="Girar cores anti-horário">↺</button>
+<button id="btnRotCW" class="secondary" title="Girar cores horário">↻</button>
+<button id="btnFlipH" class="secondary" title="Espelhar horizontal">⇄</button>
+<button id="btnSwapRO" class="secondary" title="Trocar vermelho↔laranja nesta face">R↔O</button>
 <button id="btnNextFace">Próximo ▶</button>
 </div>
 <div class="face-nav" id="faceNav"></div>
@@ -2462,6 +2464,34 @@ function rotateFaceStickers(dir) {
   showToast(dir === 1 ? 'Face girada ↻' : 'Face girada ↺');
 }
 
+function flipFaceH() {
+  const face = FACES[currentFaceIdx];
+  const map = PANEL_TO_STATE[face];
+  const panel = [];
+  for (let p = 0; p < 9; p++) panel.push(state[face][map[p]]);
+  const flipped = [panel[2],panel[1],panel[0], panel[5],panel[4],panel[3], panel[8],panel[7],panel[6]];
+  for (let p = 0; p < 9; p++) {
+    if (p === 4) continue;
+    state[face][map[p]] = flipped[p];
+  }
+  state[face][4] = DEFAULT[face];
+  renderPaintFace();
+  render3D();
+  showToast('Face espelhada ⇄');
+}
+
+function swapRedOrangeOnFace() {
+  const face = FACES[currentFaceIdx];
+  for (let i = 0; i < 9; i++) {
+    if (i === 4) continue;
+    if (state[face][i] === 'r') state[face][i] = 'o';
+    else if (state[face][i] === 'o') state[face][i] = 'r';
+  }
+  renderPaintFace();
+  render3D();
+  showToast('Vermelho ↔ Laranja');
+}
+
 function renderPaintFace() {
   const face = FACES[currentFaceIdx];
   const map = PANEL_TO_STATE[face];
@@ -3259,6 +3289,10 @@ const _btnRCW = document.getElementById('btnRotCW');
 const _btnRCCW = document.getElementById('btnRotCCW');
 if (_btnRCW) _btnRCW.onclick = () => rotateFaceStickers(1);
 if (_btnRCCW) _btnRCCW.onclick = () => rotateFaceStickers(-1);
+const _btnFH = document.getElementById('btnFlipH');
+const _btnSRO = document.getElementById('btnSwapRO');
+if (_btnFH) _btnFH.onclick = flipFaceH;
+if (_btnSRO) _btnSRO.onclick = swapRedOrangeOnFace;
 document.getElementById('btnFinish').onclick = tryFinish;
 const _btnCL = document.getElementById('btnCancelLoad');
 if (_btnCL) _btnCL.onclick = cancelLoading;
@@ -3279,36 +3313,47 @@ const COLOR_RGB = {
   w:[220,220,220], y:[255,214,10], r:[200,40,40],
   o:[240,140,40], b:[10,132,255], g:[48,209,88]
 };
-function closestColor(r,g,b) {
+function rgbToHsv(r,g,b) {
+  r/=255; g/=255; b/=255;
   const mx = Math.max(r,g,b), mn = Math.min(r,g,b);
-  const bright = (r + g + b) / 3;
-  const sat = mx - mn;
-  // branco: bem claro / acinzentado (WebView costuma escurecer)
-  if (bright >= 140 && sat <= 70) return 'w';
-  if (bright >= 120 && sat <= 45) return 'w';
-  if (bright >= 100 && sat <= 25) return 'w';
-  // amarelo
-  if (r > 160 && g > 140 && b < 110 && g > r * 0.75) return 'y';
-  // vermelho vs laranja
-  if (r > 125 && r >= g && r >= b) {
-    const gr = g / (r + 1);
-    // limiar um pouco mais baixo → menos laranja classificado como vermelho
-    if (gr >= 0.38 && g > 50 && b < 130) return 'o';
-    return 'r';
+  const d = mx - mn;
+  let h = 0;
+  if (d > 1e-6) {
+    if (mx === r) h = ((g - b) / d + (g < b ? 6 : 0)) * 60;
+    else if (mx === g) h = ((b - r) / d + 2) * 60;
+    else h = ((r - g) / d + 4) * 60;
   }
-  // verde
-  if (g > 100 && g > r * 1.1 && g > b * 0.9) return 'g';
-  // azul
-  if (b > 100 && b >= r && b >= g * 0.9) return 'b';
-  // fallback por distância (com branco "preferido" se claro)
+  const s = mx === 0 ? 0 : d / mx;
+  return { h, s, v: mx };
+}
+function closestColor(r,g,b) {
+  const { h, s, v } = rgbToHsv(r, g, b);
+  const bright = (r + g + b) / 3;
+  // branco / cinza claro
+  if (s < 0.18 && v > 0.55) return 'w';
+  if (s < 0.12 && v > 0.40) return 'w';
+  if (bright >= 150 && s < 0.22) return 'w';
+  // cores saturadas por matiz
+  if (s > 0.15 && v > 0.18) {
+    // vermelho: ~0–18° e ~340–360°
+    // laranja: ~18–45°
+    // amarelo: ~45–70°
+    // verde: ~70–160°
+    // azul: ~160–250°
+    if (h < 16 || h >= 345) return 'r';
+    if (h < 42) return 'o';
+    if (h < 72) return 'y';
+    if (h < 165) return 'g';
+    if (h < 255) return 'b';
+    return 'r'; // magenta-ish → vermelho do cubo
+  }
+  // fallback distância RGB
   let best = 'w', bestD = Infinity;
-  for (const [k,v] of Object.entries(COLOR_RGB)) {
-    let d = (r-v[0])**2 + (g-v[1])**2 + (b-v[2])**2;
-    if (k === 'w' && bright > 120) d *= 0.55;
+  for (const [k, val] of Object.entries(COLOR_RGB)) {
+    let d = (r-val[0])**2 + (g-val[1])**2 + (b-val[2])**2;
+    if (k === 'w' && bright > 110) d *= 0.5;
     if (d < bestD) { bestD = d; best = k; }
   }
-  // se ficou muito escuro, não force uma cor errada — trate como branco sujo só se acinzentado
-  if (bright < 45 && sat < 30) return best === 'b' ? 'w' : best;
   return best;
 }
 function updateScanFaceDots() {
@@ -3434,26 +3479,34 @@ function captureColor(ev) {
       return;
     }
 
-    let face = null;
-    for (const f of FACES) {
-      if (DEFAULT[f] === centerCol) { face = f; break; }
-    }
-    if (!face) face = FACES[currentFaceIdx] || 'F';
-    // grade da câmera (0–8) → state na mesma ordem (sem espelhar)
+    // Aplica na FACE ATUAL da UI (aba F/R/B/L/U/D) — evita trocar R↔O por erro de centro
+    const face = FACES[currentFaceIdx] || 'F';
+    const expected = DEFAULT[face];
     for (let p = 0; p < 9; p++) {
-      if (p === 4) state[face][4] = DEFAULT[face];
+      if (p === 4) state[face][4] = expected;
       else state[face][p] = grid[p];
     }
+    // se o centro lido ≠ centro oficial, troca em massa R↔O nessa face (erro clássico de câmera)
+    if (centerCol !== expected && (centerCol === 'r' || centerCol === 'o') && (expected === 'r' || expected === 'o')) {
+      for (let p = 0; p < 9; p++) {
+        if (p === 4) continue;
+        if (state[face][p] === 'r') state[face][p] = 'o';
+        else if (state[face][p] === 'o') state[face][p] = 'r';
+      }
+      showToast('Ajustei vermelho↔laranja nesta face');
+    }
     visited[face] = 1;
-    currentFaceIdx = Math.max(0, FACES.indexOf(face));
     lookAtFace(face);
     renderPaintFace();
     render3D();
     updateScanFaceDots();
     const doneCount = FACES.filter(f => visited[f]).length;
+    const hint = (centerCol !== expected)
+      ? (' (centro lido ' + names[centerCol] + ', esperado ' + names[expected] + ')')
+      : '';
     document.getElementById('scanResult').textContent =
-      '✓ ' + names[centerCol] + ' · ' + doneCount + '/6 · mostre outra face';
-    showToast(names[centerCol] + ' pintado (' + doneCount + '/6)');
+      '✓ ' + (FACE_NAMES[face] || face) + ' · ' + doneCount + '/6' + hint;
+    showToast((FACE_NAMES[face] || face) + ' (' + doneCount + '/6)');
     if (doneCount >= 6) {
       document.getElementById('btnFinish').disabled = false;
       showToast('Todas as faces lidas!');
