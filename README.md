@@ -2289,18 +2289,18 @@ const FACE_NAMES = {
 let DEFAULT = {U:'w', D:'y', F:'g', B:'b', L:'o', R:'r'};
 const Z = 63.6;
 const FACE_CAMERA = {
-  F:{x:-20,y:25}, R:{x:-20,y:-65}, B:{x:-20,y:205},
-  L:{x:-20,y:115}, U:{x:-100,y:25}, D:{x:70,y:25}
+  F:{x:-18,y:20}, R:{x:-18,y:-70}, B:{x:-18,y:200},
+  L:{x:-18,y:110}, U:{x:-90,y:0}, D:{x:90,y:0}
 };
 // Mapeamento painel → índices do state[] 
 // Topo do painel = parte de trás da face no 3D (corrige inversão U/D)
 const PANEL_TO_STATE = {
   F:[0,1,2,3,4,5,6,7,8],
   R:[0,1,2,3,4,5,6,7,8],
-  B:[0,1,2,3,4,5,6,7,8],
-  L:[0,1,2,3,4,5,6,7,8],
-  U:[0,1,2,3,4,5,6,7,8],
-  D:[0,1,2,3,4,5,6,7,8]
+  B:[2,1,0,5,4,3,8,7,6],   // flip H — olhando a traseira
+  L:[2,1,0,5,4,3,8,7,6],   // flip H — olhando a esquerda
+  U:[6,7,8,3,4,5,0,1,2],   // 180° — alinha com vista de cima
+  D:[6,7,8,3,4,5,0,1,2]    // 180° — alinha com vista de baixo
 };
 let C2F = {w:'U', y:'D', r:'R', o:'L', g:'F', b:'B'};
 let F2C = {U:'w', D:'y', R:'r', L:'o', F:'g', B:'b'};
@@ -3120,8 +3120,8 @@ let scanStream = null;
 let scanLiveRAF = null;
 let scanLiveGrid = null; // último 3x3 lido ao vivo
 const COLOR_RGB = {
-  w:[220,220,220], y:[255,214,10], r:[224,49,49],
-  o:[253,126,20], b:[10,132,255], g:[48,209,88]
+  w:[220,220,220], y:[255,214,10], r:[200,40,40],
+  o:[240,140,40], b:[10,132,255], g:[48,209,88]
 };
 function closestColor(r,g,b) {
   const mx = Math.max(r,g,b), mn = Math.min(r,g,b);
@@ -3132,11 +3132,15 @@ function closestColor(r,g,b) {
   if (bright >= 120 && sat <= 45) return 'w';
   if (bright >= 100 && sat <= 25) return 'w';
   // amarelo
-  if (r > 160 && g > 130 && b < 120 && (r+g) > b * 2.2) return 'y';
-  // laranja
-  if (r > 160 && g > 70 && g < 170 && b < 100 && r > g) return 'o';
-  // vermelho
-  if (r > 130 && r > g * 1.3 && r > b * 1.3) return 'r';
+  if (r > 160 && g > 140 && b < 110 && g > r * 0.75) return 'y';
+  // vermelho vs laranja (laranja tem bem mais verde)
+  if (r > 130 && r >= g && r >= b) {
+    // razão G/R: laranja ~0.45–0.75; vermelho ~0.15–0.40
+    const gr = g / (r + 1);
+    if (gr >= 0.42 && g > 55 && b < 120) return 'o';
+    if (gr < 0.42 || g < 60) return 'r';
+    return (g > 100) ? 'o' : 'r';
+  }
   // verde
   if (g > 100 && g > r * 1.1 && g > b * 0.9) return 'g';
   // azul
