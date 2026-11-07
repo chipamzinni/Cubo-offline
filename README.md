@@ -191,6 +191,8 @@ button.secondary{background:#333}button.danger{background:#ff453a}button.success
 <div class="progress" id="progress">Face 1 de 6</div>
 <div class="btn-row">
 <button id="btnPrevFace" class="secondary">◀ Anterior</button>
+<button id="btnRotCCW" class="secondary" title="Girar cores anti-horário">↺ Girar</button>
+<button id="btnRotCW" class="secondary" title="Girar cores horário">Girar ↻</button>
 <button id="btnNextFace">Próximo ▶</button>
 </div>
 <div class="face-nav" id="faceNav"></div>
@@ -2431,6 +2433,35 @@ function buildFaceNav() {
   });
 }
 
+// Gira só os 8 adesivos da face no painel (centro fixo)
+// dir: 1 = horário, -1 = anti-horário — no espaço do painel (índices 0–8)
+function rotateFaceStickers(dir) {
+  const face = FACES[currentFaceIdx];
+  const map = PANEL_TO_STATE[face];
+  // cores na ordem do painel
+  const panel = [];
+  for (let p = 0; p < 9; p++) panel.push(state[face][map[p]]);
+  const cycle = [0, 1, 2, 5, 8, 7, 6, 3]; // borda horário a partir do canto TL
+  const cols = cycle.map(i => panel[i]);
+  const n = cols.length;
+  const out = new Array(9);
+  out[4] = panel[4]; // centro
+  for (let i = 0; i < n; i++) {
+    const j = (i + (dir === 1 ? 2 : -2) + n * 2) % n; // 90° = 2 passos no ciclo de 8
+    out[cycle[j]] = cols[i];
+  }
+  // grava de volta no state via map
+  for (let p = 0; p < 9; p++) {
+    if (p === 4) continue;
+    state[face][map[p]] = out[p];
+  }
+  // garante centro oficial
+  state[face][4] = DEFAULT[face];
+  renderPaintFace();
+  render3D();
+  showToast(dir === 1 ? 'Face girada ↻' : 'Face girada ↺');
+}
+
 function renderPaintFace() {
   const face = FACES[currentFaceIdx];
   const map = PANEL_TO_STATE[face];
@@ -3103,6 +3134,10 @@ document.querySelectorAll('.color-btn').forEach(btn => {
 });
 document.getElementById('btnNextFace').onclick = goNextFace;
 document.getElementById('btnPrevFace').onclick = goPrevFace;
+const _btnRCW = document.getElementById('btnRotCW');
+const _btnRCCW = document.getElementById('btnRotCCW');
+if (_btnRCW) _btnRCW.onclick = () => rotateFaceStickers(1);
+if (_btnRCCW) _btnRCCW.onclick = () => rotateFaceStickers(-1);
 document.getElementById('btnFinish').onclick = tryFinish;
 const _btnCL = document.getElementById('btnCancelLoad');
 if (_btnCL) _btnCL.onclick = cancelLoading;
@@ -3133,13 +3168,12 @@ function closestColor(r,g,b) {
   if (bright >= 100 && sat <= 25) return 'w';
   // amarelo
   if (r > 160 && g > 140 && b < 110 && g > r * 0.75) return 'y';
-  // vermelho vs laranja (laranja tem bem mais verde)
-  if (r > 130 && r >= g && r >= b) {
-    // razão G/R: laranja ~0.45–0.75; vermelho ~0.15–0.40
+  // vermelho vs laranja
+  if (r > 125 && r >= g && r >= b) {
     const gr = g / (r + 1);
-    if (gr >= 0.42 && g > 55 && b < 120) return 'o';
-    if (gr < 0.42 || g < 60) return 'r';
-    return (g > 100) ? 'o' : 'r';
+    // limiar um pouco mais baixo → menos laranja classificado como vermelho
+    if (gr >= 0.38 && g > 50 && b < 130) return 'o';
+    return 'r';
   }
   // verde
   if (g > 100 && g > r * 1.1 && g > b * 0.9) return 'g';
