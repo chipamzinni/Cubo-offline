@@ -148,7 +148,7 @@ button.secondary{background:#333}button.danger{background:#ff453a}button.success
   </div>
   <div id="customCenters" style="display:none;margin-bottom:14px">
     <div id="centerStepLabel" style="text-align:center;font-size:.9rem;font-weight:600;margin-bottom:6px;color:#4f8cff">Passo 1/6 — Mostre a face de CIMA</div>
-    <div style="text-align:center;font-size:.78rem;opacity:.7;margin-bottom:10px;line-height:1.35">Só mude o que for diferente do padrão. Toque no quadradinho ou use a câmera/paleta.</div>
+    <div style="text-align:center;font-size:.78rem;opacity:.7;margin-bottom:10px;line-height:1.35">Capture cada face (os quadradinhos começam cinza e ficam coloridos). Quando todos estiverem coloridos, pode começar.</div>
     <div id="centerDots" style="display:flex;gap:6px;justify-content:center;margin-bottom:12px;flex-wrap:wrap"></div>
     <div class="btn-row" style="margin-bottom:8px">
       <button id="btnPrevCenter" class="secondary">◀ Anterior</button>
@@ -3081,50 +3081,72 @@ function closeScanner() {
   const video = document.getElementById('scanVideo');
   if (video) video.srcObject = null;
 }
-function captureColor() {
+/** Amostra a face em grade 3×3 dentro do retângulo pontilhado e devolve array de 9 cores */
+function sampleFace3x3() {
   const video = document.getElementById('scanVideo');
   const canvas = document.getElementById('scanCanvas');
-  if (!video || !video.videoWidth) {
-    document.getElementById('scanResult').textContent = 'Aguarde a câmera carregar…';
-    return;
-  }
+  if (!video || !video.videoWidth) return null;
   const w = video.videoWidth, h = video.videoHeight;
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext('2d');
   ctx.drawImage(video, 0, 0);
-  // amostra o centro (região do retângulo pontilhado ≈ 64% central)
-  const sx = Math.floor(w * 0.3), sy = Math.floor(h * 0.3);
-  const sw = Math.floor(w * 0.4), sh = Math.floor(h * 0.4);
-  const data = ctx.getImageData(sx, sy, sw, sh).data;
-  let r=0,g=0,b=0,n=0;
-  for (let i = 0; i < data.length; i += 16) { // amostra a cada 4 pixels
-    r += data[i]; g += data[i+1]; b += data[i+2]; n++;
+  // região do retângulo pontilhado (~64% central → 18% a 82%)
+  const x0 = w * 0.18, y0 = h * 0.18;
+  const rw = w * 0.64, rh = h * 0.64;
+  const cellW = rw / 3, cellH = rh / 3;
+  const colors = [];
+  for (let row = 0; row < 3; row++) {
+    for (let col = 0; col < 3; col++) {
+      // amostra o miolo de cada célula (evita bordas pretas do cubo)
+      const cx = Math.floor(x0 + col * cellW + cellW * 0.3);
+      const cy = Math.floor(y0 + row * cellH + cellH * 0.3);
+      const cw = Math.max(4, Math.floor(cellW * 0.4));
+      const ch = Math.max(4, Math.floor(cellH * 0.4));
+      const data = ctx.getImageData(cx, cy, cw, ch).data;
+      let r = 0, g = 0, b = 0, n = 0;
+      for (let i = 0; i < data.length; i += 8) {
+        r += data[i]; g += data[i + 1]; b += data[i + 2]; n++;
+      }
+      colors.push(closestColor(Math.round(r / n), Math.round(g / n), Math.round(b / n)));
+    }
   }
-  r = Math.round(r/n); g = Math.round(g/n); b = Math.round(b/n);
-  const col = closestColor(r, g, b);
+  return colors; // [0..8] linha por linha
+}
+
+function captureColor() {
+  const grid = sampleFace3x3();
+  if (!grid) {
+    document.getElementById('scanResult').textContent = 'Aguarde a câmera carregar…';
+    return;
+  }
+  const centerCol = grid[4]; // adesivo do centro
   const names = {w:'Branco',y:'Amarelo',r:'Vermelho',o:'Laranja',b:'Azul',g:'Verde'};
 
   // Modo definição de centros (tela inicial)
   if (window._scanForCenter) {
-    assignCenterColor(col);
-    document.getElementById('scanResult').textContent = 'Centro detectado: ' + names[col];
-    showToast(names[col] + ' → ' + centerStepNames[centerFacesOrder[centerStep]]);
-    // fecha a câmera depois de capturar o centro
-    setTimeout(closeScanner, 600);
+    assignCenterColor(centerCol);
+    document.getElementById('scanResult').textContent = 'Centro: ' + names[centerCol] + ' · face lida';
+    showToast(names[centerCol] + ' capturado');
+    setTimeout(closeScanner, 500);
     window._scanForCenter = false;
     return;
   }
 
-  // Modo pintura normal
+  // Modo pintura: aplica as 9 cores detectadas na face atual
   const face = FACES[currentFaceIdx];
-  for (let i = 0; i < 9; i++) {
-    if (i !== 4) state[face][i] = col;
+  const map = PANEL_TO_STATE[face];
+  for (let p = 0; p < 9; p++) {
+    const si = map[p];
+    if (si === 4) {
+      state[face][4] = DEFAULT[face]; // centro oficial do esquema
+    } else {
+      state[face][si] = grid[p];
+    }
   }
-  state[face][4] = DEFAULT[face];
   renderPaintFace();
   render3D();
-  document.getElementById('scanResult').textContent = 'Detectado: ' + names[col] + ' · aplicado na face';
-  showToast(names[col] + ' aplicado');
+  document.getElementById('scanResult').textContent = 'Face lida · centro ' + names[centerCol];
+  showToast('Face capturada');
 }
 document.getElementById('btnScan').onclick = openScanner;
 document.getElementById('btnCloseScan').onclick = closeScanner;
@@ -3247,17 +3269,17 @@ function updateCenterStepUI() {
     dots.innerHTML = '';
     centerFacesOrder.forEach((face, i) => {
       const d = document.createElement('div');
-      const col = DEFAULT[face] || 'w';
-      // sempre mostra a cor atual do centro no cubo
-      d.style.cssText = 'width:32px;height:32px;border-radius:8px;border:2px solid #555;cursor:pointer;background:' + COLORS[col] + ';';
+      // cinza até capturar; depois fica na cor real
       if (centersDone[face]) {
-        d.style.borderColor = '#4f8cff';
+        d.style.cssText = 'width:32px;height:32px;border-radius:8px;border:2px solid #4f8cff;cursor:pointer;background:' + COLORS[DEFAULT[face]] + ';';
+      } else {
+        d.style.cssText = 'width:32px;height:32px;border-radius:8px;border:2px solid #555;cursor:pointer;background:#3a3a3a;';
       }
       if (i === centerStep) {
         d.style.borderColor = '#fff';
         d.style.boxShadow = '0 0 0 2px #4f8cff';
       }
-      d.title = centerStepNames[face] + (centersDone[face] ? ' ✓' : '');
+      d.title = centerStepNames[face] + (centersDone[face] ? ' ✓' : ' (pendente)');
       d.onclick = () => {
         centerStep = i;
         updateCenterStepUI();
@@ -3269,12 +3291,12 @@ function updateCenterStepUI() {
   const btnNext = document.getElementById('btnNextCenter');
   const btnPrev = document.getElementById('btnPrevCenter');
   const btnStart = document.getElementById('btnStartApp');
-  if (btnNext) btnNext.disabled = centerStep >= 5;
+  if (btnNext) btnNext.disabled = centerStep >= 5 || !centersDone[f];
   if (btnPrev) btnPrev.disabled = centerStep === 0;
   const allDone = centerFacesOrder.every(fc => centersDone[fc]);
   if (btnStart) {
     btnStart.disabled = selectedScheme === 'custom' && !allDone;
-    if (allDone && selectedScheme === 'custom') btnStart.textContent = 'Começar a pintar';
+    btnStart.textContent = allDone && selectedScheme === 'custom' ? 'Começar a pintar' : 'Começar a pintar';
   }
   // vira o cubo 3D para a face atual
   lookAtFace(f);
@@ -3285,15 +3307,20 @@ function assignCenterColor(col) {
   const f = centerFacesOrder[centerStep];
   DEFAULT[f] = col;
   F2C[f] = col;
-  // reconstrói C2F
   C2F = {};
   Object.keys(F2C).forEach(face => { C2F[F2C[face]] = face; });
   state[f][4] = col;
-  // preenche a face com a cor do centro por enquanto
   for (let i = 0; i < 9; i++) state[f][i] = col;
   centersDone[f] = true;
   updateCenterStepUI();
   showToast('Centro ' + ({w:'Branco',y:'Amarelo',r:'Vermelho',o:'Laranja',b:'Azul',g:'Verde'}[col] || col) + ' definido');
+  // avança sozinho para o próximo lado pendente
+  if (centerStep < 5) {
+    setTimeout(() => {
+      centerStep++;
+      updateCenterStepUI();
+    }, 400);
+  }
 }
 
 function buildCenterPalette() {
@@ -3334,13 +3361,13 @@ document.getElementById('optCustom').onclick = () => {
   document.getElementById('optStandard').style.borderColor = '#333';
   document.getElementById('customCenters').style.display = 'block';
   centerStep = 0;
-  // já vem com o padrão — só altere o que for diferente (ex: branco ↔ verde)
-  centersDone = {U:true,F:true,R:true,D:true,L:true,B:true};
+  // começa cinza — colorido só depois de capturar cada lado
+  centersDone = {U:false,F:false,R:false,D:false,L:false,B:false};
   buildCenterPalette();
   updateCenterStepUI();
   const btnStart = document.getElementById('btnStartApp');
   if (btnStart) {
-    btnStart.disabled = false;
+    btnStart.disabled = true;
     btnStart.textContent = 'Começar a pintar';
   }
 };
