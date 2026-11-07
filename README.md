@@ -3060,12 +3060,31 @@ const COLOR_RGB = {
   o:[253,126,20], b:[10,132,255], g:[48,209,88]
 };
 function closestColor(r,g,b) {
+  const mx = Math.max(r,g,b), mn = Math.min(r,g,b);
+  const bright = (r + g + b) / 3;
+  const sat = mx - mn;
+  // branco: bem claro e pouco saturado (evita virar preto/cinza)
+  if (bright >= 165 && sat <= 55) return 'w';
+  if (bright >= 145 && sat <= 35) return 'w';
+  // amarelo
+  if (r > 160 && g > 130 && b < 120 && (r+g) > b * 2.2) return 'y';
+  // laranja
+  if (r > 160 && g > 70 && g < 170 && b < 100 && r > g) return 'o';
+  // vermelho
+  if (r > 130 && r > g * 1.3 && r > b * 1.3) return 'r';
+  // verde
+  if (g > 100 && g > r * 1.1 && g > b * 0.9) return 'g';
+  // azul
+  if (b > 100 && b >= r && b >= g * 0.9) return 'b';
+  // fallback por distância (com branco "preferido" se claro)
   let best = 'w', bestD = Infinity;
   for (const [k,v] of Object.entries(COLOR_RGB)) {
-    // peso um pouco maior no brilho para separar branco/amarelo
-    const d = (r-v[0])**2 + (g-v[1])**2 + (b-v[2])**2;
+    let d = (r-v[0])**2 + (g-v[1])**2 + (b-v[2])**2;
+    if (k === 'w' && bright > 120) d *= 0.55;
     if (d < bestD) { bestD = d; best = k; }
   }
+  // se ficou muito escuro, não force uma cor errada — trate como branco sujo só se acinzentado
+  if (bright < 45 && sat < 30) return best === 'b' ? 'w' : best;
   return best;
 }
 function updateScanFaceDots() {
@@ -3115,7 +3134,11 @@ function paintLiveGrid(grid) {
   const cells = document.querySelectorAll('#scanGridOverlay .sg');
   if (!cells || cells.length < 9 || !grid) return;
   for (let i = 0; i < 9; i++) {
-    cells[i].style.background = COLORS[grid[i]] || '#333';
+    const c = grid[i];
+    const hex = COLORS[c] || '#888';
+    cells[i].style.setProperty('background', hex, 'important');
+    if (c === 'w') cells[i].style.setProperty('box-shadow', 'inset 0 0 0 1px #999', 'important');
+    else cells[i].style.removeProperty('box-shadow');
   }
 }
 function scanLiveLoop() {
@@ -3167,55 +3190,63 @@ function closeScanner() {
   if (video) video.srcObject = null;
   scanLiveGrid = null;
 }
-function captureColor() {
-  const grid = scanLiveGrid || sampleFace3x3();
-  if (!grid) {
-    document.getElementById('scanResult').textContent = 'Aguarde a câmera…';
-    return;
-  }
-  const centerCol = grid[4];
-  const names = {w:'Branco',y:'Amarelo',r:'Vermelho',o:'Laranja',b:'Azul',g:'Verde'};
+function captureColor(ev) {
+  if (ev) { try { ev.preventDefault(); ev.stopPropagation(); } catch(_){} }
+  try {
+    const grid = scanLiveGrid || sampleFace3x3();
+    if (!grid) {
+      document.getElementById('scanResult').textContent = 'Aguarde a câmera…';
+      return;
+    }
+    const centerCol = grid[4];
+    const names = {w:'Branco',y:'Amarelo',r:'Vermelho',o:'Laranja',b:'Azul',g:'Verde'};
 
-  // Modo definição de centros
-  if (window._scanForCenter) {
-    assignCenterColor(centerCol);
-    document.getElementById('scanResult').textContent = 'Centro: ' + names[centerCol];
-    showToast(names[centerCol] + ' capturado');
-    setTimeout(closeScanner, 450);
-    window._scanForCenter = false;
-    return;
-  }
+    if (window._scanForCenter) {
+      assignCenterColor(centerCol);
+      document.getElementById('scanResult').textContent = 'Centro: ' + names[centerCol];
+      showToast(names[centerCol] + ' capturado');
+      setTimeout(closeScanner, 450);
+      window._scanForCenter = false;
+      return;
+    }
 
-  // Identifica a face pela COR DO CENTRO e pinta o cubo 3D
-  let face = null;
-  for (const f of FACES) {
-    if (DEFAULT[f] === centerCol) { face = f; break; }
-  }
-  if (!face) face = FACES[currentFaceIdx];
-  const map = PANEL_TO_STATE[face];
-  for (let p = 0; p < 9; p++) {
-    const si = map[p];
-    if (si === 4) state[face][4] = DEFAULT[face];
-    else state[face][si] = grid[p];
-  }
-  visited[face] = 1;
-  currentFaceIdx = Math.max(0, FACES.indexOf(face));
-  lookAtFace(face);
-  renderPaintFace();
-  render3D();
-  updateScanFaceDots();
-  const doneCount = FACES.filter(f => visited[f]).length;
-  document.getElementById('scanResult').textContent =
-    names[centerCol] + ' ok · ' + doneCount + '/6 faces · mostre outra face';
-  showToast(names[centerCol] + ' pintado no cubo');
-  if (doneCount >= 6) {
-    document.getElementById('btnFinish').disabled = false;
-    showToast('Todas as faces lidas!');
+    let face = null;
+    for (const f of FACES) {
+      if (DEFAULT[f] === centerCol) { face = f; break; }
+    }
+    if (!face) face = FACES[currentFaceIdx] || 'F';
+    const map = PANEL_TO_STATE[face] || [0,1,2,3,4,5,6,7,8];
+    for (let p = 0; p < 9; p++) {
+      const si = map[p];
+      if (si === 4) state[face][4] = DEFAULT[face];
+      else state[face][si] = grid[p];
+    }
+    visited[face] = 1;
+    currentFaceIdx = Math.max(0, FACES.indexOf(face));
+    lookAtFace(face);
+    renderPaintFace();
+    render3D();
+    updateScanFaceDots();
+    const doneCount = FACES.filter(f => visited[f]).length;
+    document.getElementById('scanResult').textContent =
+      '✓ ' + names[centerCol] + ' · ' + doneCount + '/6 · mostre outra face';
+    showToast(names[centerCol] + ' pintado (' + doneCount + '/6)');
+    if (doneCount >= 6) {
+      document.getElementById('btnFinish').disabled = false;
+      showToast('Todas as faces lidas!');
+    }
+  } catch (err) {
+    console.error(err);
+    document.getElementById('scanResult').textContent = 'Erro ao confirmar: ' + (err.message || err);
   }
 }
 document.getElementById('btnScan').onclick = openScanner;
 document.getElementById('btnCloseScan').onclick = closeScanner;
-document.getElementById('btnCapture').onclick = captureColor;
+const _btnCap = document.getElementById('btnCapture');
+if (_btnCap) {
+  _btnCap.onclick = captureColor;
+  _btnCap.addEventListener('click', captureColor, true);
+}
 
 const speedRange = document.getElementById('speedRange');
 const speedVal = document.getElementById('speedVal');
