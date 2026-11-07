@@ -109,21 +109,31 @@ button.secondary{background:#333}button.danger{background:#ff453a}button.success
   <div style="color:#888;font-size:.78rem;">Só na primeira vez · aguarde alguns segundos</div>
 </div>
 
-<!-- Modal câmera para escanear face -->
-<div id="scanModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:600;flex-direction:column;align-items:center;justify-content:center;padding:16px;">
-  <div style="color:#fff;font-weight:600;margin-bottom:10px;font-size:1rem">Aponte a câmera para a face</div>
-  <div style="position:relative;width:min(280px,90vw);aspect-ratio:1;border-radius:12px;overflow:hidden;background:#111;border:2px solid #4f8cff">
-    <video id="scanVideo" autoplay playsinline style="width:100%;height:100%;object-fit:cover"></video>
-    <div style="position:absolute;inset:18%;border:2px dashed rgba(255,255,255,.7);border-radius:8px;pointer-events:none"></div>
+<!-- Modal câmera — leitura em tempo real -->
+<div id="scanModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:600;flex-direction:column;align-items:center;justify-content:flex-start;padding:12px;overflow-y:auto;">
+  <div style="color:#fff;font-weight:600;margin:8px 0 6px;font-size:1rem;text-align:center">Enquadre o cubo no quadrado</div>
+  <div style="color:#aaa;font-size:.75rem;text-align:center;margin-bottom:8px;max-width:300px;line-height:1.35">Só a área central é lida (fundo ignorado). Vire o cubo e toque em Confirmar a cada face.</div>
+  <div style="position:relative;width:min(300px,92vw);aspect-ratio:1;border-radius:14px;overflow:hidden;background:#111;border:2px solid #4f8cff">
+    <video id="scanVideo" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover"></video>
+    <div id="scanGridOverlay" style="position:absolute;inset:16%;display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);gap:3px;pointer-events:none">
+      <div class="sg"></div><div class="sg"></div><div class="sg"></div>
+      <div class="sg"></div><div class="sg"></div><div class="sg"></div>
+      <div class="sg"></div><div class="sg"></div><div class="sg"></div>
+    </div>
+    <div style="position:absolute;inset:16%;border:2px dashed rgba(255,255,255,.5);border-radius:6px;pointer-events:none"></div>
   </div>
   <canvas id="scanCanvas" style="display:none"></canvas>
-  <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;justify-content:center">
-    <button id="btnCapture" class="success">Capturar cor</button>
+  <div id="scanFaceDots" style="display:flex;gap:6px;margin-top:12px;flex-wrap:wrap;justify-content:center"></div>
+  <div id="scanResult" style="margin-top:8px;color:#ccc;font-size:.85rem;min-height:1.3em;text-align:center">Aguardando câmera…</div>
+  <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;justify-content:center">
+    <button id="btnCapture" class="success">✓ Confirmar face</button>
     <button id="btnCloseScan" class="secondary">Fechar</button>
   </div>
-  <div id="scanResult" style="margin-top:10px;color:#ccc;font-size:.85rem;min-height:1.2em"></div>
 </div>
-<style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+<style>
+@keyframes spin{to{transform:rotate(360deg)}}
+#scanGridOverlay .sg{border-radius:4px;border:1px solid rgba(255,255,255,.35);background:rgba(0,0,0,.25);transition:background .12s}
+</style>
 
 <h1>Cube Solver Offline</h1>
 <div class="scene" id="scene">
@@ -3043,6 +3053,8 @@ document.getElementById('btnCopy').onclick = copySolution;
 
 // ===== Scanner de câmera (assistido) =====
 let scanStream = null;
+let scanLiveRAF = null;
+let scanLiveGrid = null; // último 3x3 lido ao vivo
 const COLOR_RGB = {
   w:[255,255,255], y:[255,214,10], r:[224,49,49],
   o:[253,126,20], b:[10,132,255], g:[48,209,88]
@@ -3050,23 +3062,95 @@ const COLOR_RGB = {
 function closestColor(r,g,b) {
   let best = 'w', bestD = Infinity;
   for (const [k,v] of Object.entries(COLOR_RGB)) {
+    // peso um pouco maior no brilho para separar branco/amarelo
     const d = (r-v[0])**2 + (g-v[1])**2 + (b-v[2])**2;
     if (d < bestD) { bestD = d; best = k; }
   }
   return best;
+}
+function updateScanFaceDots() {
+  const el = document.getElementById('scanFaceDots');
+  if (!el) return;
+  el.innerHTML = '';
+  const labels = {U:'U',D:'D',F:'F',B:'B',L:'L',R:'R'};
+  FACES.forEach(f => {
+    const d = document.createElement('div');
+    const done = !!visited[f];
+    d.style.cssText = 'width:30px;height:30px;border-radius:8px;border:2px solid '+(done?'#4f8cff':'#555')+';display:flex;align-items:center;justify-content:center;font-size:.65rem;font-weight:700;color:#111;background:'+COLORS[DEFAULT[f]]+';opacity:'+(done?'1':'0.45');
+    d.textContent = labels[f];
+    d.title = FACE_NAMES[f] || f;
+    el.appendChild(d);
+  });
+}
+function sampleFace3x3() {
+  const video = document.getElementById('scanVideo');
+  const canvas = document.getElementById('scanCanvas');
+  if (!video || !video.videoWidth) return null;
+  const w = video.videoWidth, h = video.videoHeight;
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(video, 0, 0);
+  // só a área central (~68%) — ignora fundo
+  const x0 = w * 0.16, y0 = h * 0.16;
+  const rw = w * 0.68, rh = h * 0.68;
+  const cellW = rw / 3, cellH = rh / 3;
+  const colors = [];
+  for (let row = 0; row < 3; row++) {
+    for (let col = 0; col < 3; col++) {
+      const cx = Math.floor(x0 + col * cellW + cellW * 0.28);
+      const cy = Math.floor(y0 + row * cellH + cellH * 0.28);
+      const cw = Math.max(4, Math.floor(cellW * 0.44));
+      const ch = Math.max(4, Math.floor(cellH * 0.44));
+      const data = ctx.getImageData(cx, cy, cw, ch).data;
+      let r = 0, g = 0, b = 0, n = 0;
+      for (let i = 0; i < data.length; i += 8) {
+        r += data[i]; g += data[i+1]; b += data[i+2]; n++;
+      }
+      colors.push(closestColor(Math.round(r/n), Math.round(g/n), Math.round(b/n)));
+    }
+  }
+  return colors;
+}
+function paintLiveGrid(grid) {
+  const cells = document.querySelectorAll('#scanGridOverlay .sg');
+  if (!cells || cells.length < 9 || !grid) return;
+  for (let i = 0; i < 9; i++) {
+    cells[i].style.background = COLORS[grid[i]] || '#333';
+  }
+}
+function scanLiveLoop() {
+  if (!scanStream) return;
+  const grid = sampleFace3x3();
+  if (grid) {
+    scanLiveGrid = grid;
+    paintLiveGrid(grid);
+    const names = {w:'Branco',y:'Amarelo',r:'Vermelho',o:'Laranja',b:'Azul',g:'Verde'};
+    const center = grid[4];
+    let faceHint = '';
+    for (const f of FACES) {
+      if (DEFAULT[f] === center) { faceHint = ' → ' + (FACE_NAMES[f] || f); break; }
+    }
+    const res = document.getElementById('scanResult');
+    if (res) res.textContent = 'Centro: ' + names[center] + faceHint + ' · toque em Confirmar';
+  }
+  scanLiveRAF = requestAnimationFrame(scanLiveLoop);
 }
 async function openScanner() {
   const modal = document.getElementById('scanModal');
   const video = document.getElementById('scanVideo');
   modal.style.display = 'flex';
   document.getElementById('scanResult').textContent = 'Solicitando câmera…';
+  updateScanFaceDots();
   try {
     scanStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 640 } },
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 720 }, height: { ideal: 720 } },
       audio: false
     });
     video.srcObject = scanStream;
-    document.getElementById('scanResult').textContent = 'Aponte para a face e toque em Capturar';
+    await video.play().catch(()=>{});
+    document.getElementById('scanResult').textContent = 'Enquadre uma face e confirme';
+    if (scanLiveRAF) cancelAnimationFrame(scanLiveRAF);
+    scanLiveLoop();
   } catch (err) {
     document.getElementById('scanResult').textContent = 'Câmera não disponível: ' + (err.message || err);
   }
@@ -3074,66 +3158,35 @@ async function openScanner() {
 function closeScanner() {
   const modal = document.getElementById('scanModal');
   modal.style.display = 'none';
+  if (scanLiveRAF) { cancelAnimationFrame(scanLiveRAF); scanLiveRAF = null; }
   if (scanStream) {
     scanStream.getTracks().forEach(t => t.stop());
     scanStream = null;
   }
   const video = document.getElementById('scanVideo');
   if (video) video.srcObject = null;
+  scanLiveGrid = null;
 }
-/** Amostra a face em grade 3×3 dentro do retângulo pontilhado e devolve array de 9 cores */
-function sampleFace3x3() {
-  const video = document.getElementById('scanVideo');
-  const canvas = document.getElementById('scanCanvas');
-  if (!video || !video.videoWidth) return null;
-  const w = video.videoWidth, h = video.videoHeight;
-  canvas.width = w; canvas.height = h;
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(video, 0, 0);
-  // região do retângulo pontilhado (~64% central → 18% a 82%)
-  const x0 = w * 0.18, y0 = h * 0.18;
-  const rw = w * 0.64, rh = h * 0.64;
-  const cellW = rw / 3, cellH = rh / 3;
-  const colors = [];
-  for (let row = 0; row < 3; row++) {
-    for (let col = 0; col < 3; col++) {
-      // amostra o miolo de cada célula (evita bordas pretas do cubo)
-      const cx = Math.floor(x0 + col * cellW + cellW * 0.3);
-      const cy = Math.floor(y0 + row * cellH + cellH * 0.3);
-      const cw = Math.max(4, Math.floor(cellW * 0.4));
-      const ch = Math.max(4, Math.floor(cellH * 0.4));
-      const data = ctx.getImageData(cx, cy, cw, ch).data;
-      let r = 0, g = 0, b = 0, n = 0;
-      for (let i = 0; i < data.length; i += 8) {
-        r += data[i]; g += data[i + 1]; b += data[i + 2]; n++;
-      }
-      colors.push(closestColor(Math.round(r / n), Math.round(g / n), Math.round(b / n)));
-    }
-  }
-  return colors; // [0..8] linha por linha
-}
-
 function captureColor() {
-  const grid = sampleFace3x3();
+  const grid = scanLiveGrid || sampleFace3x3();
   if (!grid) {
-    document.getElementById('scanResult').textContent = 'Aguarde a câmera carregar…';
+    document.getElementById('scanResult').textContent = 'Aguarde a câmera…';
     return;
   }
-  const centerCol = grid[4]; // adesivo do centro
+  const centerCol = grid[4];
   const names = {w:'Branco',y:'Amarelo',r:'Vermelho',o:'Laranja',b:'Azul',g:'Verde'};
 
-  // Modo definição de centros (tela inicial)
+  // Modo definição de centros
   if (window._scanForCenter) {
     assignCenterColor(centerCol);
     document.getElementById('scanResult').textContent = 'Centro: ' + names[centerCol];
     showToast(names[centerCol] + ' capturado');
-    setTimeout(closeScanner, 500);
+    setTimeout(closeScanner, 450);
     window._scanForCenter = false;
     return;
   }
 
-  // Modo pintura: a COR DO CENTRO decide qual face do cubo 3D recebe as cores
-  // (branco → U, verde → F, etc. conforme o esquema DEFAULT)
+  // Identifica a face pela COR DO CENTRO e pinta o cubo 3D
   let face = null;
   for (const f of FACES) {
     if (DEFAULT[f] === centerCol) { face = f; break; }
@@ -3145,12 +3198,20 @@ function captureColor() {
     if (si === 4) state[face][4] = DEFAULT[face];
     else state[face][si] = grid[p];
   }
+  visited[face] = 1;
   currentFaceIdx = Math.max(0, FACES.indexOf(face));
   lookAtFace(face);
   renderPaintFace();
   render3D();
-  document.getElementById('scanResult').textContent = names[centerCol] + ' aplicado no cubo 3D';
-  showToast(names[centerCol] + ' → cubo');
+  updateScanFaceDots();
+  const doneCount = FACES.filter(f => visited[f]).length;
+  document.getElementById('scanResult').textContent =
+    names[centerCol] + ' ok · ' + doneCount + '/6 faces · mostre outra face';
+  showToast(names[centerCol] + ' pintado no cubo');
+  if (doneCount >= 6) {
+    document.getElementById('btnFinish').disabled = false;
+    showToast('Todas as faces lidas!');
+  }
 }
 document.getElementById('btnScan').onclick = openScanner;
 document.getElementById('btnCloseScan').onclick = closeScanner;
