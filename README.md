@@ -103,10 +103,11 @@ button.secondary{background:#333}button.danger{background:#ff453a}button.success
 </div>
 
 <!-- Loading do solver (bloqueia cliques) -->
-<div id="loadingOverlay" style="display:none;position:fixed;inset:0;background:rgba(15,17,21,.82);z-index:500;align-items:center;justify-content:center;flex-direction:column;gap:16px;backdrop-filter:blur(4px);">
+<div id="loadingOverlay" style="display:none;position:fixed;inset:0;background:rgba(15,17,21,.82);z-index:500;align-items:center;justify-content:center;flex-direction:column;gap:14px;backdrop-filter:blur(4px);">
   <div style="width:42px;height:42px;border:3px solid #333;border-top-color:#4f8cff;border-radius:50%;animation:spin .7s linear infinite;"></div>
-  <div style="color:#e8eaed;font-size:.95rem;font-weight:500;">Preparando solver…</div>
-  <div style="color:#888;font-size:.78rem;">Só na primeira vez · aguarde alguns segundos</div>
+  <div id="loadingTitle" style="color:#e8eaed;font-size:.95rem;font-weight:500;">Preparando solver…</div>
+  <div id="loadingSub" style="color:#888;font-size:.78rem;">Aguarde alguns segundos</div>
+  <button id="btnCancelLoad" class="secondary" style="margin-top:8px;display:none">Cancelar</button>
 </div>
 
 <!-- Modal câmera — leitura em tempo real -->
@@ -2142,13 +2143,13 @@ button.secondary{background:#333}button.danger{background:#ff453a}button.success
       }
       return results;
     };
+    var __nodes = 0;
+    var __nodeLimit = 250000; // evita travar em cubo impossível
     phase1 = function(state, depth) {
       var len, m, move, next, ref, ref1, results;
+      if (++__nodes > __nodeLimit) { return; }
       if (depth === 0) {
         if (state.minDist1() === 0) {
-          // Make sure we don't start phase 2 with a phase 2 move as the
-          // last move in phase 1, because phase 2 would then repeat the
-          // same move.
           if (state.lastMove === null || (ref = state.lastMove, indexOf.call(allMoves2, ref) < 0)) {
             return phase2search(state);
           }
@@ -2222,6 +2223,10 @@ button.secondary{background:#333}button.danger{background:#ff453a}button.success
     state = freeStates.pop().init(this);
     phase1search(state);
     freeStates.push(state);
+    // Sem solução (cubo impossível ou profundidade insuficiente)
+    if (solution == null) {
+      return null;
+    }
     // Trim the trailing space
     if (solution.length > 0) {
       solution = solution.substring(0, solution.length - 1);
@@ -2292,10 +2297,10 @@ const FACE_CAMERA = {
 const PANEL_TO_STATE = {
   F:[0,1,2,3,4,5,6,7,8],
   R:[0,1,2,3,4,5,6,7,8],
-  B:[2,1,0,5,4,3,8,7,6],           // flip horizontal (olhando a traseira)
-  L:[2,1,0,5,4,3,8,7,6],           // flip horizontal
-  U:[6,7,8,3,4,5,0,1,2],           // 180° — corrige branco invertido
-  D:[0,1,2,3,4,5,6,7,8]            // corrige amarelo invertido
+  B:[0,1,2,3,4,5,6,7,8],
+  L:[0,1,2,3,4,5,6,7,8],
+  U:[0,1,2,3,4,5,6,7,8],
+  D:[0,1,2,3,4,5,6,7,8]
 };
 let C2F = {w:'U', y:'D', r:'R', o:'L', g:'F', b:'B'};
 let F2C = {U:'w', D:'y', R:'r', L:'o', F:'g', B:'b'};
@@ -2580,37 +2585,71 @@ function applyQuarterTurn(move) {
 }
 
 let solverQueue = [];
-function showLoading(on) {
+let loadingWatchdog = null;
+function showLoading(on, title, sub) {
   const el = document.getElementById('loadingOverlay');
   if (!el) return;
   el.style.display = on ? 'flex' : 'none';
+  const t = document.getElementById('loadingTitle');
+  const s = document.getElementById('loadingSub');
+  const c = document.getElementById('btnCancelLoad');
+  if (t && title) t.textContent = title;
+  if (s && sub) s.textContent = sub;
+  if (c) c.style.display = on ? 'inline-block' : 'none';
+  if (loadingWatchdog) { clearTimeout(loadingWatchdog); loadingWatchdog = null; }
+  if (on) {
+    loadingWatchdog = setTimeout(() => {
+      // se ainda estiver na tela após 18s, libera UI
+      const ov = document.getElementById('loadingOverlay');
+      if (ov && ov.style.display !== 'none') {
+        showLoading(false);
+        solverBusy = false;
+        const btn = document.getElementById('btnFinish');
+        if (btn) btn.disabled = !FACES.every(f => visited[f]);
+        showError('Demorou demais. O cubo pode ter cores impossíveis — revise o pintado e tente de novo.');
+      }
+    }, 18000);
+  }
+}
+function cancelLoading() {
+  showLoading(false);
+  solverBusy = false;
+  solverQueue = [];
+  const btn = document.getElementById('btnFinish');
+  if (btn) btn.disabled = !FACES.every(f => visited[f]);
+  showToast('Cancelado');
 }
 function ensureSolver(cb) {
   if (solverReady) { cb(); return; }
   solverQueue.push(cb);
   if (solverBusy) return;
   solverBusy = true;
-  showLoading(true);
+  showLoading(true, 'Preparando solver…', 'Primeira vez pode levar alguns segundos');
   setTimeout(() => {
     try {
       Cube.initSolver();
       solverReady = true;
       solverBusy = false;
-      showLoading(false);
       const q = solverQueue.splice(0);
-      q.forEach(fn => { try { fn(); } catch (e) { console.error(e); } });
+      q.forEach(fn => { try { fn(); } catch (e) {
+        console.error(e);
+        showLoading(false);
+        showError(String(e && e.message || e));
+      } });
     } catch (e) {
       solverBusy = false;
       solverQueue = [];
       showLoading(false);
       const m = String(e && e.message || e);
+      const btn = document.getElementById('btnFinish');
+      if (btn) btn.disabled = !FACES.every(f => visited[f]);
       if (/400ms|infinite loop|Preview stopped/i.test(m)) {
-        showError('Este preview online corta scripts longos. Salve o HTML e abra no Chrome/Safari — funciona offline.');
+        showError('Este preview online corta scripts longos. Abra o HTML no Chrome.');
       } else {
         showError('Falha ao iniciar solver: ' + m);
       }
     }
-  }, 50);
+  }, 30);
 }
 
 // Busca solução curta (até 4 movimentos) por força bruta — o Kociemba embutido
@@ -2658,18 +2697,22 @@ function generateSolution() {
     if (typeof cube.isSolved === 'function' && cube.isSolved()) return [];
   } catch (_) {}
 
-  // 1) Tenta solução curta ótima (1–4 moves) — mantém R2/U' como um passo só
-  const short = solveShort(cube, 4);
-  if (short && short.length) return short;
-
-  // 2) Fallback: Kociemba
-  const alg = cube.solve();
-  if (!alg || !String(alg).trim()) return [];
-  const moves = String(alg).trim().split(/\s+/).filter(Boolean);
-  const test = cube.clone();
-  test.move(moves.join(' '));
-  if (test.isSolved() && moves.length > 0 && cube.isSolved()) return [];
-  return moves;
+  // Só Kociemba (sem busca bruta — evitava travar no celular)
+  let alg = '';
+  try {
+    if (typeof cube.solveUpright === 'function') {
+      alg = cube.solveUpright(16) || '';
+    } else if (typeof cube.solve === 'function') {
+      alg = cube.solve() || '';
+    }
+  } catch (e) {
+    throw new Error('Não foi possível resolver. Cores podem formar um cubo impossível.');
+  }
+  if (!alg || !String(alg).trim()) {
+    try { if (cube.isSolved()) return []; } catch(_){}
+    throw new Error('Cubo impossível ou cores inconsistentes. Revise as faces (bordas/cantos não batem).');
+  }
+  return String(alg).trim().split(/\s+/).filter(Boolean);
 }
 
 /** 1 = lento … 5 = rápido → duração base em ms */
@@ -2958,8 +3001,11 @@ function scrambleCube() {
 function tryFinish() {
   hardStop();
   forceCenters();
+  const btn = document.getElementById('btnFinish');
+  if (btn) btn.disabled = true;
   if (!isValidColorCount()) {
     showError('Cada cor deve aparecer exatamente 9 vezes. Verifique o que pintou.');
+    if (btn) btn.disabled = false;
     return;
   }
   if (!centersOk()) {
@@ -2968,19 +3014,35 @@ function tryFinish() {
     renderPaintFace();
   }
   ensureSolver(() => {
-    try {
-      solution = generateSolution();
-      currentStep = 0;
-      document.getElementById('paintMode').style.display = 'none';
-      document.getElementById('solveMode').style.display = 'block';
-      lookAtFace('F');
-      updateStepUI();
-      if (solution.length === 0) showToast('Já está resolvido!');
-      else showToast(solution.length + ' movimentos');
-    } catch (e) {
-      hardStop();
-      showError(e.message || String(e));
-    }
+    showLoading(true, 'Calculando solução…', 'Quase lá');
+    setTimeout(() => {
+      try {
+        solution = generateSolution();
+        currentStep = 0;
+        document.getElementById('paintMode').style.display = 'none';
+        document.getElementById('solveMode').style.display = 'block';
+        lookAtFace('F');
+        updateStepUI();
+        if (solution.length === 0) showToast('Já está resolvido!');
+        else showToast(solution.length + ' movimentos');
+      } catch (e) {
+        hardStop();
+        console.error(e);
+        const msg = String(e && e.message || e);
+        if (/timeout|slow|long/i.test(msg)) {
+          showError('Solução demorou demais. Confira as cores (cubo pode estar impossível).');
+        } else {
+          showError(msg || 'Falha ao resolver. Verifique as cores pintadas.');
+        }
+        if (btn) btn.disabled = false;
+      } finally {
+        showLoading(false);
+        // se voltou ao paint por erro, libera botão
+        if (document.getElementById('paintMode').style.display !== 'none') {
+          if (btn) btn.disabled = !FACES.every(f => visited[f]);
+        }
+      }
+    }, 80);
   });
 }
 
@@ -3042,6 +3104,8 @@ document.querySelectorAll('.color-btn').forEach(btn => {
 document.getElementById('btnNextFace').onclick = goNextFace;
 document.getElementById('btnPrevFace').onclick = goPrevFace;
 document.getElementById('btnFinish').onclick = tryFinish;
+const _btnCL = document.getElementById('btnCancelLoad');
+if (_btnCL) _btnCL.onclick = cancelLoading;
 document.getElementById('btnReset').onclick = resetAll;
 document.getElementById('btnReset2').onclick = resetAll;
 document.getElementById('btnBackPaint').onclick = showPaintMode;
@@ -3056,16 +3120,17 @@ let scanStream = null;
 let scanLiveRAF = null;
 let scanLiveGrid = null; // último 3x3 lido ao vivo
 const COLOR_RGB = {
-  w:[255,255,255], y:[255,214,10], r:[224,49,49],
+  w:[220,220,220], y:[255,214,10], r:[224,49,49],
   o:[253,126,20], b:[10,132,255], g:[48,209,88]
 };
 function closestColor(r,g,b) {
   const mx = Math.max(r,g,b), mn = Math.min(r,g,b);
   const bright = (r + g + b) / 3;
   const sat = mx - mn;
-  // branco: bem claro e pouco saturado (evita virar preto/cinza)
-  if (bright >= 165 && sat <= 55) return 'w';
-  if (bright >= 145 && sat <= 35) return 'w';
+  // branco: bem claro / acinzentado (WebView costuma escurecer)
+  if (bright >= 140 && sat <= 70) return 'w';
+  if (bright >= 120 && sat <= 45) return 'w';
+  if (bright >= 100 && sat <= 25) return 'w';
   // amarelo
   if (r > 160 && g > 130 && b < 120 && (r+g) > b * 2.2) return 'y';
   // laranja
@@ -3525,8 +3590,16 @@ document.getElementById('btnStartApp').onclick = () => {
 forceCenters();
 lookAtFace('F');
 render3D();
-// não chama renderPaintFace ainda — espera o usuário escolher o modo
 showInfo(false);
+// prepara solver em segundo plano (evita espera longa no 1º Resolver)
+setTimeout(() => {
+  try {
+    if (!solverReady && typeof Cube !== 'undefined' && Cube.initSolver) {
+      Cube.initSolver();
+      solverReady = true;
+    }
+  } catch (e) { console.warn('pre-init solver', e); }
+}, 1200);
 </script>
 <div class="toast" id="toast"></div>
 </body>
